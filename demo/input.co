@@ -1,0 +1,3 @@
+service Add {
+  double Add(double a, double b);
+}

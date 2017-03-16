@@ -12,6 +12,7 @@
 #include "libbase/noncopyable.h"
 #include "libbase/mutexlock.h"
 #include "libbase/condvar.h"
+#include "jsonutil/json.h"
 
 #include <memory>
 #include <functional>
@@ -27,6 +28,8 @@ typedef struct {
   int request_id;
   bool async;
 } RequestContext;
+
+
 
 class RpcClient: private libbase::Noncopyable {
  public:
@@ -76,6 +79,13 @@ class RpcClient: private libbase::Noncopyable {
   libbase::MutexLock mu_; // used to pause client
   libbase::CondVar condvar_; // used to pause client
 };
+
+template <typename T>
+void GenericActionCb(libbase::ByteBuffer& buf, T* ret) {
+  jsonutil::Value response;
+  response.Parse(buf.AddrOfRead(), buf.ReadableBytes());
+  *(response.GetArrayValue(1)) >> (*ret);
+}
 
 } // namespace leetrpc
 #endif // LEETRPC_RPC_CLIENT_H__
