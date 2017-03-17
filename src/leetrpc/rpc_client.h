@@ -29,8 +29,6 @@ typedef struct {
   bool async;
 } RequestContext;
 
-
-
 class RpcClient: private libbase::Noncopyable {
  public:
   typedef std::function<void(libbase::ByteBuffer& )> ReadAction;
@@ -80,11 +78,25 @@ class RpcClient: private libbase::Noncopyable {
   libbase::CondVar condvar_; // used to pause client
 };
 
+
 template <typename T>
 void GenericActionCb(libbase::ByteBuffer& buf, T* ret) {
   jsonutil::Value response;
   response.Parse(buf.AddrOfRead(), buf.ReadableBytes());
   *(response.GetArrayValue(1)) >> (*ret);
+}
+
+template <typename T>
+using AsynActionCb = std::function<void(std::shared_ptr<T>)>;
+
+template <typename T>
+void GenericAsynActionCb(libbase::ByteBuffer& buf, AsynActionCb<T> asyn_handler) {
+  jsonutil::Value response;
+  response.Parse(buf.AddrOfRead(), buf.ReadableBytes());
+  std::shared_ptr<T> ptr(new T());
+  *(response.GetArrayValue(1)) >> (*ptr);
+  // TODO: shift asyn_handler to a working thread.
+  asyn_handler(ptr);
 }
 
 } // namespace leetrpc

@@ -1,6 +1,8 @@
 #include "leetrpc/rpc_server.h"
 #include "jsonutil/json.h"
 
+#include <unistd.h>
+
 namespace leetrpc {
 void RpcServer::ReadCb(std::shared_ptr<network::Connection> c,
                        libbase::ByteBuffer& data) {
@@ -15,6 +17,7 @@ void RpcServer::ReadCb(std::shared_ptr<network::Connection> c,
     }
     int data_len = data.ReadableBytes() - (end_pos - data.AddrOfRead()) - 1;
     if (data_len >= len) {
+      sleep(3);
       LOG_INFO("Client Request Raw Data: %s", data.ToString().c_str());
       data.MoveReadPos(end_pos - data.AddrOfRead() + 1);
       jsonutil::Value request, response(jsonutil::kJSON_ARRAY);

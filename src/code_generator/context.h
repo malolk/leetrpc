@@ -15,12 +15,12 @@ class Context {
   void Start(AST* a);
   // void Free(AST* a);
  private:
-  std::string AddArg(NodeArg* a);
+  std::string AddArg(NodeArg* a, const std::string& refs);
   std::string AddClassFooter();
   std::string AddClassHeader(const std::string& cls, const std::string& extends, const std::string& name);
   std::string AddClientConstructor(const std::string& cls, const std::string& port);
   std::string AddClientData();
-  std::string AddClientFunc(NodeFunc* f, int s_id, int f_id);
+  std::string AddClientFunc(NodeFunc* f, int s_id, int f_id, std::string& pri_buf);
   std::string AddFuncSignature(NodeFunc* f);
   std::string AddHeaderGuardEnd();
   std::string AddHeaderGuardStart(std::string name, std::string port);

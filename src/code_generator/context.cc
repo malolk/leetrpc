@@ -38,13 +38,18 @@ static std::string TransferStdType(const std::string& type) {
   return type;
 }
 
-static std::string AddArgImpl(NodeArg* a, const std::string& d, int add_type) {
+static std::string AddArgImpl(NodeArg* a, const std::string& d, int add_type, const std::string& refs = "") {
   std::string buf;
   while (a) {
     if (add_type) {
       // add_type: 0 without type, 1 add type
       std::string arg_t = a->arg_t;
-      buf += TransferStdType(a->arg_t) + " ";
+      std::string arg_std = TransferStdType(arg_t);
+      if (arg_t.size() < arg_std.size()) {
+        buf += TransferStdType(a->arg_t) + refs + " ";
+      } else {
+        buf += TransferStdType(a->arg_t) + " ";
+      }
     }
     buf += a->name;
     a = a->next;
@@ -53,8 +58,8 @@ static std::string AddArgImpl(NodeArg* a, const std::string& d, int add_type) {
   return buf;
 }
 
-std::string Context::AddArg(NodeArg* a) {
-  return AddArgImpl(a, ",", 1);
+std::string Context::AddArg(NodeArg* a, const std::string& refs = "") {
+  return AddArgImpl(a, ",", 1, refs);
 }
 
 std::string Context::AddFuncSignature(NodeFunc* f) {
@@ -84,33 +89,59 @@ std::string Context::AddOneIncluder(const std::string& header, int is_std) {
 }
 
 /* Request frame: [req_id] [service_id] [method_id] [params] */
-std::string Context::AddClientFunc(NodeFunc* f, int s_id, int f_id) {
+std::string Context::AddClientFunc(NodeFunc* f, int s_id, 
+                                   int f_id, std::string& pri_buf) {
   std::string buf;
   std::string ss_id = std::to_string(s_id);
   std::string sf_id = std::to_string(f_id);
-  buf += AddIndentation(2) + AddFuncSignature(f);
-  buf += AddIndentation(2) +  "{"                                              + " \r\n";
-  buf += AddIndentation(4) +  "jsonutil::Value request(jsonutil::kJSON_ARRAY)" + ";\r\n";
-  buf += AddIndentation(4) +  "jsonutil::Builder<jsonutil::Value> batch"       + ";\r\n";
-  buf += AddIndentation(4) +  "int req_id = c_.GenId();"                       + ";\r\n";
-  buf += AddIndentation(4) +  "batch << req_id << " + ss_id + " << " + sf_id   + ";\r\n";
-  buf += AddIndentation(4) +  "jsonutil::Value params(jsonutil::kJSON_ARRAY)"  + ";\r\n";
-  buf += AddIndentation(4) +  "jsonutil::Builder<jsonutil::Value> arg_batch"   + ";\r\n";
-  buf += AddIndentation(4) +  "arg_batch << " 
-                           +  AddArgImpl(
-                              reinterpret_cast<NodeArg*>(f->arg), " <<", 0)    + ";\r\n";
-  buf += AddIndentation(4) +  "params.MergeArrayBuilder(arg_batch)"            + ";\r\n";
-  buf += AddIndentation(4) +  "batch << params"                                + ";\r\n";
-  buf += AddIndentation(4) +  "request.MergeArrayBuilder(batch)"               + ";\r\n";
-  buf += AddIndentation(4) +  "libbase::ByteBuffer req_buf"                    + ";\r\n";
-  buf += AddIndentation(4) +  "req_buf.AppendString(request.ToString())"       + ";\r\n";
-  buf += AddIndentation(4) +  TransferStdType(f->ret_t) + " res"               + ";\r\n";
-  buf += AddIndentation(4) +  "c_.Register(req_id, req_buf," 
-                           +  " std::bind(&GenericActionCb<" 
-                           +  TransferStdType(f->ret_t) 
-                           +  ">, std::placeholders::_1, &res), -1)"           + ";\r\n";
-  buf += AddIndentation(4) +  "return res"                                     + ";\r\n";
-  buf += AddIndentation(2) +  "}"                                              + " \r\n";
+  std::string arg_str = AddArg(reinterpret_cast<NodeArg*>(f->arg), "&");
+ 
+  std::string ret_str = TransferStdType(f->ret_t);
+  std::string func_str = ret_str + " " + f->name + "(" + arg_str + ", int timeout = -1)";
+  std::string asyn_func_str = std::string("void ") + f->name + "(" + arg_str + ", AsynActionCb<" + ret_str 
+                              + "> asyn_handler, int timeout = -1)";
+  std::string common_func_str = std::string("int ") + f->name + "Common(" + arg_str + ", libbase::ByteBuffer& req_buf)";
+
+  std::string invoke_arg = AddArgImpl(reinterpret_cast<NodeArg*>(f->arg), ",", 0);
+  // Sync func
+  buf += AddIndentation(2) + func_str + " {\r\n";
+  buf += AddIndentation(4) + "libbase::ByteBuffer req_buf"                               + ";\r\n";
+  buf += AddIndentation(4) + "int req_id = " 
+                           + f->name + "Common(" + invoke_arg + ", req_buf)"             + ";\r\n";
+  buf += AddIndentation(4) + ret_str + " res"                                            + ";\r\n";
+  buf += AddIndentation(4) + "c_.Register(req_id, req_buf, std::bind(&GenericActionCb<" 
+                           + ret_str + ">, std::placeholders::_1, &res), timeout)"       + ";\r\n";
+  buf += AddIndentation(4) + "return res"                                                + ";\r\n";
+  buf += AddIndentation(2) + "}\r\n\r\n";
+
+  // Async func
+  buf += AddIndentation(2) + asyn_func_str + " {\r\n";
+  buf += AddIndentation(4) + "libbase::ByteBuffer req_buf"                               + ";\r\n";
+  buf += AddIndentation(4) + "int req_id = " 
+                           + f->name + "Common(" + invoke_arg + ", req_buf)"             + ";\r\n";
+  buf += AddIndentation(4) + "c_.Register(req_id, req_buf, "
+                             "std::bind(&GenericAsynActionCb<" + ret_str + ">, " 
+                             "std::placeholders::_1, asyn_handler), timeout, true)"      + ";\r\n";
+  buf += AddIndentation(2) + "}\r\n\r\n";
+  
+  // common func
+  pri_buf += AddIndentation(2) +  common_func_str + " "                            + "{\r\n";
+  pri_buf += AddIndentation(4) +  "jsonutil::Value request(jsonutil::kJSON_ARRAY)" + ";\r\n";
+  pri_buf += AddIndentation(4) +  "jsonutil::Builder<jsonutil::Value> batch"       + ";\r\n";
+  pri_buf += AddIndentation(4) +  "int req_id = c_.GenId();"                       + ";\r\n";
+  pri_buf += AddIndentation(4) +  "batch << req_id << " + ss_id + " << " + sf_id   + ";\r\n";
+  pri_buf += AddIndentation(4) +  "jsonutil::Value params(jsonutil::kJSON_ARRAY)"  + ";\r\n";
+  pri_buf += AddIndentation(4) +  "jsonutil::Builder<jsonutil::Value> arg_batch"   + ";\r\n";
+  pri_buf += AddIndentation(4) +  "arg_batch << " +  AddArgImpl(
+                                  reinterpret_cast<NodeArg*>(f->arg), " <<", 0)    + ";\r\n";
+  pri_buf += AddIndentation(4) +  "params.MergeArrayBuilder(arg_batch)"            + ";\r\n";
+  pri_buf += AddIndentation(4) +  "batch << params"                                + ";\r\n";
+  pri_buf += AddIndentation(4) +  "request.MergeArrayBuilder(batch)"               + ";\r\n";
+  pri_buf += AddIndentation(4) +  "req_buf.AppendString(request.ToString())"       + ";\r\n";
+  pri_buf += AddIndentation(4) +  "return req_id"                                  + ";\r\n";
+  pri_buf += AddIndentation(2) +  "}"                                              + " \r\n";
+  pri_buf += "\r\n";
+
   return buf;
 }
 
@@ -188,10 +219,7 @@ std::string Context::AddServerConstructor(const std::string& cls, const std::str
 }
 
 std::string Context::AddClientData() {
-  std::string buf;
-  buf += AddIndentation(1) + "private:\r\n";
-  buf += AddIndentation(2) + "RpcClient& c_;\r\n";
-  return buf;
+  return AddIndentation(2) + "RpcClient& c_;\r\n";
 }
 
 std::string Context::AddIncluder() {
@@ -261,13 +289,14 @@ void Context::BuildClientStubs() {
     buf += AddClassHeader(meta_[srv_index].first, "", "Client");
     buf += AddClientConstructor(meta_[srv_index].first, "Client");
 
+    std::string pri_buf = " private:\r\n";
     int func_size = meta_[srv_index].second.size();
     NodeFunc** fpp = &(meta_[srv_index].second[0]);
     for (int func_index = 0; func_index < func_size; ++func_index) {
-      buf += AddClientFunc(fpp[func_index], srv_index, func_index);
-      buf += "\r\n";
+      buf += AddClientFunc(fpp[func_index], srv_index, func_index, pri_buf);
     }
 
+    buf += pri_buf;
     buf += AddClientData();
     buf += AddClassFooter();
     buf += AddNameSpaceEnd();

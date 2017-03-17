@@ -15,7 +15,22 @@ class AddClientStub {
   AddClientStub(RpcClient& c): c_(c) {
   }
 
-  double Add(double a, double b)  { 
+  double Add(double a, double b, int timeout = -1) {
+    libbase::ByteBuffer req_buf;
+    int req_id = AddCommon(a, b, req_buf);
+    double res = -1;
+    c_.Register(req_id, req_buf, std::bind(&GenericActionCb<double>, std::placeholders::_1, &res), timeout);
+    return res;
+  }
+
+  void Add(double a, double b, AsynActionCb<double> asyn_handler, int timeout = -1) {
+    libbase::ByteBuffer req_buf;
+    int req_id = AddCommon(a, b, req_buf);
+    c_.Register(req_id, req_buf, std::bind(&GenericAsynActionCb<double>, std::placeholders::_1, asyn_handler), timeout, true);
+  }
+
+ private:
+  int AddCommon(double a, double b, libbase::ByteBuffer& req_buf) {
     jsonutil::Value request(jsonutil::kJSON_ARRAY);
     jsonutil::Builder<jsonutil::Value> batch;
     int req_id = c_.GenId();;
@@ -26,32 +41,10 @@ class AddClientStub {
     params.MergeArrayBuilder(arg_batch);
     batch << params;
     request.MergeArrayBuilder(batch);
-    libbase::ByteBuffer req_buf;
     req_buf.AppendString(request.ToString());
-    double res;
-    c_.Register(req_id, req_buf, std::bind(&GenericActionCb<double>, std::placeholders::_1, &res), -1);
-    return res;
+    return req_id;
   } 
 
-  std::vector<double> Sum(std::vector<double> a, double num)  { 
-    jsonutil::Value request(jsonutil::kJSON_ARRAY);
-    jsonutil::Builder<jsonutil::Value> batch;
-    int req_id = c_.GenId();;
-    batch << req_id << 0 << 1;
-    jsonutil::Value params(jsonutil::kJSON_ARRAY);
-    jsonutil::Builder<jsonutil::Value> arg_batch;
-    arg_batch << a << num;
-    params.MergeArrayBuilder(arg_batch);
-    batch << params;
-    request.MergeArrayBuilder(batch);
-    libbase::ByteBuffer req_buf;
-    req_buf.AppendString(request.ToString());
-    std::vector<double> res;
-    c_.Register(req_id, req_buf, std::bind(&GenericActionCb<std::vector<double>>, std::placeholders::_1, &res), -1);
-    return res;
-  } 
-
- private:
   RpcClient& c_;
 };
 }
