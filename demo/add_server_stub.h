@@ -1,9 +1,10 @@
 #ifndef LEETRPC_ADD_SERVER_H__
 #define LEETRPC_ADD_SERVER_H__
 
-#include "leetrpc/dispatcher.h"
 #include "jsonutil/json.h"
+#include "leetrpc/dispatcher.h"
 #include "leetrpc/rpc_client.h"
+#include "leetrpc/rpc_status.h"
 #include <map>
 #include <string>
 #include <vector>
@@ -21,6 +22,7 @@ class AddServerStub: public Dispatcher {
   void Dispatch(const jsonutil::Value& req, jsonutil::Value& response, int m_id) {
     jsonutil::Builder<jsonutil::Value> batch;
     const jsonutil::Value* params = req.GetArrayValue(3);
+    RpcStatus st;
     if (m_id == 0) {
       batch << *(req.GetArrayValue(0));
       double a;
@@ -28,8 +30,13 @@ class AddServerStub: public Dispatcher {
       double b;
       *(params->GetArrayValue(1)) >> b;
       double res = Add(a, b);
-      batch << res;
+      batch << st.CodeNum() << res;
+    } else {
+      std::string m_id_s = std::to_string(m_id);
+      st.NotFoundMethod(m_id_s.c_str(), m_id_s.size());
+      batch << *(req.GetArrayValue(0)) << st.CodeNum() << st.ToString();
     }
+
     response.MergeArrayBuilder(batch);
   }
 

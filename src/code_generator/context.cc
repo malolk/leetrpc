@@ -97,10 +97,16 @@ std::string Context::AddClientFunc(NodeFunc* f, int s_id,
   std::string arg_str = AddArg(reinterpret_cast<NodeArg*>(f->arg), "&");
  
   std::string ret_str = TransferStdType(f->ret_t);
-  std::string func_str = ret_str + " " + f->name + "(" + arg_str + ", int timeout = -1)";
-  std::string asyn_func_str = std::string("void ") + f->name + "(" + arg_str + ", AsynActionCb<" + ret_str 
-                              + "> asyn_handler, int timeout = -1)";
-  std::string common_func_str = std::string("int ") + f->name + "Common(" + arg_str + ", libbase::ByteBuffer& req_buf)";
+  std::string func_str = ret_str + " " + f->name + "(" 
+                         + arg_str + ", RpcStatus* rsp = NULL" 
+                         + ", int timeout = -1)";
+  std::string asyn_func_str = std::string("void ") + f->name + "(" 
+                              + arg_str + ", AsynActionCb<" + ret_str 
+                              + "> asyn_handler, int timeout = -1," 
+                              + " ErrorActionCb error_cb = DefaultErrorCb)";
+  std::string common_func_str = std::string("int ") + f->name 
+                                + "Common(" + arg_str 
+                                + ", libbase::ByteBuffer& req_buf)";
 
   std::string invoke_arg = AddArgImpl(reinterpret_cast<NodeArg*>(f->arg), ",", 0);
   // Sync func
@@ -110,7 +116,7 @@ std::string Context::AddClientFunc(NodeFunc* f, int s_id,
                            + f->name + "Common(" + invoke_arg + ", req_buf)"             + ";\r\n";
   buf += AddIndentation(4) + ret_str + " res"                                            + ";\r\n";
   buf += AddIndentation(4) + "c_.Register(req_id, req_buf, std::bind(&GenericActionCb<" 
-                           + ret_str + ">, std::placeholders::_1, &res), timeout)"       + ";\r\n";
+                           + ret_str + ">, std::placeholders::_1, &res, rsp), timeout)"       + ";\r\n";
   buf += AddIndentation(4) + "return res"                                                + ";\r\n";
   buf += AddIndentation(2) + "}\r\n\r\n";
 
@@ -121,7 +127,7 @@ std::string Context::AddClientFunc(NodeFunc* f, int s_id,
                            + f->name + "Common(" + invoke_arg + ", req_buf)"             + ";\r\n";
   buf += AddIndentation(4) + "c_.Register(req_id, req_buf, "
                              "std::bind(&GenericAsynActionCb<" + ret_str + ">, " 
-                             "std::placeholders::_1, asyn_handler), timeout, true)"      + ";\r\n";
+                             "std::placeholders::_1, asyn_handler, error_cb), timeout, true)"      + ";\r\n";
   buf += AddIndentation(2) + "}\r\n\r\n";
   
   // common func
@@ -166,21 +172,26 @@ std::string Context::AddServerOneMethodDispatcher(const NodeFunc* f) {
     else calls = calls + arg->name;
   }
   buf += AddIndentation(6) + calls + ");\r\n";
-  buf += AddIndentation(6) + "batch << res" + ";\r\n";
+  buf += AddIndentation(6) + "batch << st.CodeNum() << res" + ";\r\n";
   return buf;
 }
 
 std::string Context::AddServerMethodDispatcher(const std::vector<NodeFunc*>& funcs) {
   std::string buf;
   int size = static_cast<int>(funcs.size());
+  buf += AddIndentation(4) + "RpcStatus st;\r\n";
   buf += AddIndentation(4);
   for (int i = 0; i < size; ++i) {
     buf  = buf + "if (m_id == " + std::to_string(i) + ") {\r\n";
     buf += AddServerOneMethodDispatcher(funcs[i]);
     buf += AddIndentation(4);
-    if (i == (size - 1)) buf += "}\r\n";
-    else buf += "} else ";
+    buf += "} else ";
   }
+  buf += "{\r\n";
+  buf += AddIndentation(6) + "std::string m_id_s = std::to_string(m_id);\r\n";
+  buf += AddIndentation(6) + "st.NotFoundMethod(m_id_s.c_str(), m_id_s.size());\r\n";
+  buf += AddIndentation(6) + "batch << *(req.GetArrayValue(0)) << st.CodeNum() << st.ToString();\r\n";
+  buf += AddIndentation(4) + "}\r\n\r\n";
   return buf;
 }
 
@@ -225,7 +236,9 @@ std::string Context::AddClientData() {
 std::string Context::AddIncluder() {
   std::string buf;
   buf += AddOneIncluder("jsonutil/json.h", 0);
+  buf += AddOneIncluder("leetrpc/dispatcher.h", 0);
   buf += AddOneIncluder("leetrpc/rpc_client.h", 0);
+  buf += AddOneIncluder("leetrpc/rpc_status.h", 0);
   buf += AddOneIncluder("map", 1);
   buf += AddOneIncluder("string", 1);
   buf += AddOneIncluder("vector", 1);
@@ -324,7 +337,6 @@ void Context::BuildServerStubs() {
   for (int srv_index = 0; srv_index < srv_size; ++srv_index) {
     std::string buf;
     buf += AddHeaderGuardStart(meta_[srv_index].first, "Server");
-    buf += AddOneIncluder("leetrpc/dispatcher.h", 0);
     buf += AddIncluder();
     buf += AddNameSpaceStart("leetrpc");
     buf += AddClassHeader(meta_[srv_index].first, ": public Dispatcher", "Server");

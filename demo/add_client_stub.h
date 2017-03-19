@@ -2,7 +2,9 @@
 #define LEETRPC_ADD_CLIENT_H__
 
 #include "jsonutil/json.h"
+#include "leetrpc/dispatcher.h"
 #include "leetrpc/rpc_client.h"
+#include "leetrpc/rpc_status.h"
 #include <map>
 #include <string>
 #include <vector>
@@ -15,18 +17,18 @@ class AddClientStub {
   AddClientStub(RpcClient& c): c_(c) {
   }
 
-  double Add(double a, double b, int timeout = -1) {
+  double Add(double a, double b, RpcStatus* rsp = NULL, int timeout = -1) {
     libbase::ByteBuffer req_buf;
     int req_id = AddCommon(a, b, req_buf);
-    double res = -1;
-    c_.Register(req_id, req_buf, std::bind(&GenericActionCb<double>, std::placeholders::_1, &res), timeout);
+    double res;
+    c_.Register(req_id, req_buf, std::bind(&GenericActionCb<double>, std::placeholders::_1, &res, rsp), timeout);
     return res;
   }
 
-  void Add(double a, double b, AsynActionCb<double> asyn_handler, int timeout = -1) {
+  void Add(double a, double b, AsynActionCb<double> asyn_handler, int timeout = -1, ErrorActionCb error_cb = DefaultErrorCb) {
     libbase::ByteBuffer req_buf;
     int req_id = AddCommon(a, b, req_buf);
-    c_.Register(req_id, req_buf, std::bind(&GenericAsynActionCb<double>, std::placeholders::_1, asyn_handler), timeout, true);
+    c_.Register(req_id, req_buf, std::bind(&GenericAsynActionCb<double>, std::placeholders::_1, asyn_handler, error_cb), timeout, true);
   }
 
  private:
