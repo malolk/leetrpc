@@ -4,9 +4,12 @@
 #include <stdlib.h>
 
 namespace leetrpc {
-    
-void RpcClient::GenericInitCb(std::shared_ptr<network::Connection> c, 
-                              libbase::ByteBuffer& data) {
+
+void DefaultErrorCb(const RpcStatus& st) {
+  LOG_ERROR("%s", st.ToString().c_str());
+}
+
+void RpcClient::GenericInitCb(ConnPtr c, libbase::ByteBuffer& data) {
   libbase::ByteBuffer length;
   length.AppendString(std::to_string(data.ReadableBytes()) + "#");
   c->Send(length);
@@ -14,8 +17,7 @@ void RpcClient::GenericInitCb(std::shared_ptr<network::Connection> c,
   data.Reset();
 }
 
-void RpcClient::GenericReadCb(std::shared_ptr<network::Connection> c, 
-                              libbase::ByteBuffer& data, 
+void RpcClient::GenericReadCb(ConnPtr c, libbase::ByteBuffer& data, 
                               const ReadAction& action, int id) {
   LOG_INFO("Server Response: %s", data.ToString().c_str());
   const char* end_pos = data.Find("#", data.AddrOfRead());
@@ -23,8 +25,6 @@ void RpcClient::GenericReadCb(std::shared_ptr<network::Connection> c,
     // using endian conversion maybe better
     int len = std::stoi(std::string(data.AddrOfRead(), end_pos - data.AddrOfRead()));
     if (len < 0) {
-      LOG_ERROR("Invalid data length = %d", len);
-      Close(id);
     }
     int data_len = data.ReadableBytes() - (end_pos - data.AddrOfRead()) - 1;
     if (data_len >= len) {
@@ -37,8 +37,10 @@ void RpcClient::GenericReadCb(std::shared_ptr<network::Connection> c,
 
 void RpcClient::GenericTimeoutCallback(int id) {
   ReqIter it = requests_.find(id);
+  LOG_INFO("%s", "Time out");
   if (it == requests_.end()) return;
-  Delete(it);
+  ConnPtr c = (it->second).conn;
+  c->SetTimeout(); // connection is timeout.
 }
 
 void RpcClient::Register(int id, libbase::ByteBuffer& buf, 
@@ -47,27 +49,31 @@ void RpcClient::Register(int id, libbase::ByteBuffer& buf,
     LOG_WARN("Request Id: %d is already exist!", id);
     return;
   }
-  RequestContext ctx;
-  ctx.request_id = id;
   int sockfd = network::Connector::GetConnectedSocket(1, server_addr_, 1);
-  ctx.conn = std::shared_ptr<network::Connection>(
-             new network::Connection(sockfd, loop_.EpollPtr()));
+  ConnPtr conn(new network::Connection(sockfd, loop_.EpollPtr()));
+  conn->SetReadOperation(std::bind(&RpcClient::GenericReadCb, 
+                         this, std::placeholders::_1, 
+                         std::placeholders::_2, action, id));
+  conn->SetInitOperation(std::bind(&RpcClient::GenericInitCb, 
+                         this, std::placeholders::_1, buf));
+  conn->SetCloseOperation(std::bind(&RpcClient::Close, this, id));
+  AddRequestContext(conn, timeout, id, async);
+}
 
-  if (timeout > 0) {
-    ctx.timer = network::Timer(std::bind(&RpcClient::GenericTimeoutCallback, 
-                               this, id), timeout);
-    loop_.EpollPtr()->RunTimer(&(ctx.timer_id), ctx.timer);
-  }
-  ctx.async = async;
-  requests_[id] = ctx;
-  (ctx.conn)->SetReadOperation(std::bind(&RpcClient::GenericReadCb, 
-                               this, std::placeholders::_1, 
-                               std::placeholders::_2, action, id));
-  (ctx.conn)->SetInitOperation(std::bind(&RpcClient::GenericInitCb, 
-                               this, std::placeholders::_1, buf));
-  (ctx.conn)->SetCloseOperation(std::bind(&RpcClient::Close, this, id));
-  (ctx.conn)->Initialize();
+void RpcClient::AddRequestContext(ConnPtr conn, int timeout, int id, bool async) {
+  loop_.EpollPtr()->RunLater(std::bind(&RpcClient::AddRequestContextInLoop, 
+                                       this, conn, timeout, id, async));
   if (!async) Pause();
+}
+
+void RpcClient::AddRequestContextInLoop(ConnPtr conn, int timeout, int id, bool async) {
+  loop_.EpollPtr()->MustInLoopThread();
+  requests_[id] = {conn, network::TimerQueue::TimerIdType(), id, async};
+  conn->Initialize();
+  if (timeout > 0) {
+    network::Timer timer = network::Timer(std::bind(&RpcClient::GenericTimeoutCallback, this, id), timeout);
+    loop_.EpollPtr()->RunTimer(&(requests_[id].timer_id), timer);
+  }
 }
 
 void RpcClient::Close(int id) {
@@ -80,15 +86,30 @@ void RpcClient::Close(int id) {
 }
 
 void RpcClient::Delete(ReqIter it) {
-  if ((it->second).async == false) Resume();
-  std::shared_ptr<network::Connection> backup = (it->second).conn;
+  if (!(it->second).async) Resume();
+  ConnPtr backup = (it->second).conn;
   (it->second).conn.reset();
   loop_.EpollPtr()->RunLater(std::bind(&RpcClient::DeleteInLoop, this, backup));
   requests_.erase(it);
 }
 
-void RpcClient::DeleteInLoop(std::shared_ptr<network::Connection> c) {
+void RpcClient::DeleteInLoop(ConnPtr c) {
   c->DestroyedInLoop(c);
+}
+
+void RpcClient::Pause() {
+  assert(is_paused_ == false);
+  is_paused_ = true;
+  libbase::MutexLockGuard m(mu_);
+  while (is_paused_) {
+    condvar_.Wait();
+  }
+}
+
+void RpcClient::Resume() {
+  libbase::MutexLockGuard m(mu_);
+  is_paused_ = false;
+  condvar_.NotifyOne();
 }
 
 } // namespace leetrpc
