@@ -25,6 +25,9 @@ void RpcClient::GenericReadCb(ConnPtr c, libbase::ByteBuffer& data,
     // using endian conversion maybe better
     int len = std::stoi(std::string(data.AddrOfRead(), end_pos - data.AddrOfRead()));
     if (len < 0) {
+      data.Reset();
+      Close(id);
+      return;
     }
     int data_len = data.ReadableBytes() - (end_pos - data.AddrOfRead()) - 1;
     if (data_len >= len) {
